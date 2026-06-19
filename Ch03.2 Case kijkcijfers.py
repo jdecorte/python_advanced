@@ -12,8 +12,8 @@ import openmeteo_requests
 import requests_cache
 from retry_requests import retry
 
-scrape = True
-genre_prediction = False
+scrape = False
+genre_prediction = True
 weather_history = False
 debug = False
 
@@ -66,122 +66,83 @@ class KijkCijfers(Data):
         self.df['channel'] = self.df['channel'].apply(convert) 
 
 class Genre(Data):
-    def __init__(self,kijkcijfers_df):
-        super().__init__()
+    def __init__(self,kijkcijfers_df,logger:Logger):
+        super().__init__(logger)
         self.my_name()
-        api_key = open("api_key.txt").read().strip()
-        self.client = genai.Client(api_key=api_key)
-        self.model_name = "gemini-1.5-flash"
-        # limits of free tier
-        self.requests_per_minute = 15
-        self.tokens_per_minute = 1000000  # not used
-        self.requests_per_day = 1500 
         self.csv = "genres.csv"
 
         # self.records = [] # list of dictionaries
         self.kijkcijfers_df = kijkcijfers_df
         self.df = None
         self.count = 0
-        self.buffer_size = 20
 
-    def predict_buffer(self, buffer):
-        self.my_name()
-        idle_time = 60 / self.requests_per_minute + 1  # add 1 second to be sure
-        self.count += len(buffer)
-        text = "Geef voor volgende kanaal/programma-combinaties genre en subgenre (Nederlandstalig) in json-formaat met items kanaal, programma, genre en subgenre:"
-        text += "(Bepaal genre en subgenre zodat gelijkaardige programma's hetzelfde genre en subgenre krijgen.)\\"     
-        for combo in buffer:
-            text += combo[0] + ":" + combo[1] + "\\"
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=text
-        )
-        data = response.text.replace('```json','').replace('```','')
-        genre = json.loads(data)
+        self.genres = [
+            "Actualiteiten en nieuws",
+            "Talkshow",
+            "Reality-tv",
+            "Fictie (drama)",
+            "Comedy",
+            "Quiz",
+            "Spelprogramma",
+            "Documentaire",
+            "Human interest",
+            "Lifestyle",
+            "Kookprogramma",
+            "Reisprogramma",
+            "Woon- en renovatieprogramma",
+            "Datingprogramma",
+            "Talentenshow",
+            "Muziekprogramma",
+            "Jeugdprogramma",
+            "Sport",
+            "Misdaad (crime)",
+            "Soap",
+            "Telenovelle",
+            "Historisch programma",
+            "Natuurprogramma",
+            "Wetenschap en technologie",
+            "Cultuurprogramma",
+            "Religieus programma",
+            "Satire"
+        ]
 
-        for item in genre:
-            record = {
-            'channel': item['kanaal'],
-            'program': item['programma'],
-            'genre': item['genre'],
-            'subgenre': item['subgenre'],
-            'aantal': 1
-            }
-            self.records.append(record)
-        time.sleep(idle_time)
-        return
+        MODEL_NAME = 'llama-3.3-70b-versatile'
+        self.model = ChatGroq(model_name=MODEL_NAME,
+                        temperature=0.5, # controls creativity
+                        api_key=os.getenv('GROQ_API_KEY'))
 
     def predict_genres(self):
         self.my_name()
         # Create a set to track unique (channel, program) combinations
-        unique_combinations = set()
-        buffer = []
+        # unique_combinations = set()
+        # buffer = []
         for index, row in self.kijkcijfers_df.iterrows():
             try:
                 channel = row['channel']
                 program = row['description']
-                combination = (channel, program)
 
-                if combination not in unique_combinations:
-                    print(f"Predicting genre for {channel} - {program}")
-                    buffer.append(combination)
-                    unique_combinations.add(combination)
-                    if len(buffer) == self.buffer_size:
-                        self.predict_buffer(buffer)
-                        buffer = []
-                else:
-                    print(f"Skipping {channel} - {program}")
-                    # Find the existing record and update 'aantal'
-                    for record in self.records:
-                        if record['channel'] == channel and record['program'] == program:
-                            record['aantal'] += 1
-                            break
+                # check if the combination is already in self.records
+                if any(record['channel'] == channel and record['program'] == program for record in self.records):
+                    continue
+
+                question = f"Wat is het genre van het Vlaamse Tv-programma {program} op de zender {channel}? Beperk je antwoord tot één element uit de volgende lijst: " 
+                question += ", ".join(self.genres) 
+                question += " Herhaal de vraag NIET in je antwoord. Geef enkel het genre terug, zonder extra uitleg of context."  
+                res = self.model.invoke(question)
+                # find out what is in the result
+                # res.model_dump()
+                genre = res.content
+                record = {
+                'channel': channel,
+                'program': program,
+                'genre': genre,
+                }
+                self.logger.info(f"Predicted genre for {program} on {channel}: {genre}")
+                self.records.append(record)
+
             except Exception as e:
-                print(f"An error occurred: {e}")
+                self.logger.error(f"An error occurred: {e}")
                 continue
-
-    def convert_names(self):
-        conversion_table = {
-            "Actiefilm": "Actie",
-            "Actua": "Actualiteit",
-            "Actualiteiten": "Actualiteit",
-            "Actueel": "Actualiteit",
-            "Animatiefilm": "Animatie",
-            "Avonturenfilm": "Avontuur",
-            "Comedyserie": "Comedy",
-            "Comedie": "Comedy",
-            "Crimi": "Misdaad",
-            "Crime": "Misdaad",
-            "Misdaadserie": "Misdaad",
-            "Familiefilm": "Familie",
-            "Fantasiefilm": "Fantasie",
-            "Fantasy": "Fantasie",            
-            "Gespreks": "Gesprek",        
-            "Gespreksprogramma": "Gesprek",
-            "Gespreks-programma": "Gesprek",
-            "Gesprekshow": "Gesprek",
-            "Humor & Entertainment": "Humor",
-            "Informatief": "Informatie",
-            "Kinderprogramma": "Kinderen",
-            "Kookprogramma": "Koken",
-            "Natuurdocumentaire": "Documentaire",
-            "Nieuws en Actualiteit": "Actualiteit",
-            "Nieuws & Actualiteit": "Actualiteit",
-            "Nieuws & Actueel": "Actualiteit",
-            "Reality-tv": "Reality",
-            "Reality-TV": "Reality",
-            "Reisprogramma": "Reis",
-            "Romance": "Romantiek",
-            "Romantische Komedie": "Romantiek",
-            "Romantische film": "Romantiek",
-            "Talentenshow": "Talent",
-            "Science Fiction": "Sciencefiction",
-            "Sciencefictionfilm": "Sciencefiction",
-            "Sci-fi": "Sciencefiction",
-            "VariÃ©tÃ©" : "Variété"
-            }
-        convert = lambda x: conversion_table[x] if x in conversion_table else x
-        self.df['genre'] = self.df['genre'].apply(convert)   
 
 class Weather(Data):
     def __init__(self):
@@ -197,15 +158,18 @@ class Weather(Data):
         return
 
 def main():
+    logger = Logger(name="KijkCijfers", log_file="kijkcijfers.log")
     start_date = datetime.date.today() - datetime.timedelta(days=35)
     end_date = datetime.date.today() - datetime.timedelta(days=30)
     
-    kijkcijfers = KijkCijfers(start_date, end_date)
-    print(kijkcijfers.start_date)
+    kijkcijfers = KijkCijfers(start_date, end_date,logger)
+    logger.info(f"Start date: {kijkcijfers.start_date}")
+    logger.info(f"End date: {kijkcijfers.end_date}")
     if scrape:
         kijkcijfers.scrape_data()
         kijkcijfers.create_df()
         kijkcijfers.clean_data()
+        kijkcijfers.convert_names()
         kijkcijfers.save_df()
     else:  # postprocessing
         kijkcijfers.load_df()
@@ -213,20 +177,14 @@ def main():
         kijkcijfers.save_df()
 
     if genre_prediction:
-        genre = Genre(kijkcijfers.df)
+        genre = Genre(kijkcijfers.df, logger)
         genre.predict_genres()
-        print(f"Aantal programma's = {genre.count}") 
-        genre.convert_names()
+        logger.info(f"Aantal programma's = {genre.count}")
         genre.create_df()
-        genre.save_df()
-    else: # postprocessing
-        genre = Genre(kijkcijfers.df)
-        genre.load_df()
-        genre.convert_names()
         genre.save_df()
 
     if weather_history:
-        weather = Weather()
+        weather = Weather(logger)
         weather.get_weather(start_date, end_date)
         weather.save_df()
    
