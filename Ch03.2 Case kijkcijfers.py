@@ -12,34 +12,44 @@ import openmeteo_requests
 import requests_cache
 from retry_requests import retry
 
-scrape = False
-genre_prediction = True
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv, find_dotenv
+from logger import Logger
+
+load_dotenv(find_dotenv(usecwd=True))
+
+scrape = True
+genre_prediction = False
 weather_history = False
-debug = False
+
+debug = True
 
 class Data:
     """Base class for data handling. This class provides common functionality for loading, saving, and processing data. 
     It is intended to be subclassed by specific data types (e.g., KijkCijfers, Genre, Weather) 
     that will implement their own data-specific methods."""
-    def __init__(self):
+    def __init__(self,logger:Logger):
         self.records = [] # list of dictionaries
+        self.logger = logger
 
     def create_df(self):
         self.df = pd.DataFrame(self.records)
+        self.logger.info(f"DataFrame created with {len(self.df)} records.")
   
     def load_df(self):
         self.df = pd.read_csv(self.csv,sep=";")
 
     def save_df(self):
         self.df.to_csv(self.csv, index=False, sep=";")
+        self.logger.info(f"Data saved to {self.csv}")
 
     def my_name(self):
         if debug: # print the name of the calling function
-            print (f"Calling {sys._getframe(1).f_code.co_name}")
+            self.logger.info(f"Calling {sys._getframe(1).f_code.co_name}")
 
 class KijkCijfers(Data):
-    def __init__(self, start_date, end_date):
-        super().__init__()  
+    def __init__(self, start_date, end_date, logger:Logger):
+        super().__init__(logger)  
         self.start_date = start_date
         self.end_date = end_date
         self.url = "https://api.cim.be/api/cim_tv_public_results_daily_views?dateDiff={date}&reportType=north"
